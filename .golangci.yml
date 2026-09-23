@@ -1,0 +1,59 @@
+version: 2
+
+linters:
+  exclusions:
+    rules:
+      - linters:
+          - gosec
+          - goconst
+        path: "_test\\.go$"
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - containedctx
+    - contextcheck
+    - decorder
+    - durationcheck
+    - errcheck
+    - errorlint
+    - exptostd
+    - fatcontext
+    - forbidigo
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - goconst
+    - gosec
+    - godoclint
+    - grouper
+    - iface
+    - importas
+    - mirror
+    - misspell
+    - musttag
+    - nilerr
+    - nilnil
+    - perfsprint
+    - prealloc
+    - reassign
+    - recvcheck
+    - sloglint
+    - testifylint
+    - thelper
+    - unconvert
+    - wastedassign
+    - whitespace
+  settings:
+    staticcheck:
+      checks: ["all", "-ST1000", "-ST1018", "-QF1003", "-QF1008"]
+    goconst:
+      min-len: 4
+      min-occurrences: 4
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+run:
+  timeout: 600s
