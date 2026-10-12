@@ -2,9 +2,9 @@ package tools
 
 import mcpserver "github.com/mark3labs/mcp-go/server"
 
-// Register is the extension point for adding inspect_data and render_chart
-// to a server.
+// Register adds the inspect_data and render_chart tools to srv.
 func Register(srv *mcpserver.MCPServer) error {
-	_ = srv
+	srv.AddTool(newInspectDataTool(), handleInspectData)
+	srv.AddTool(newRenderChartTool(), handleRenderChart)
 	return nil
 }
