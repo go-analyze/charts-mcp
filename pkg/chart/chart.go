@@ -96,12 +96,12 @@ func SeriesSources(optionJSON []byte) []SeriesSource {
 }
 
 // Expand resolves the binding keys (series[].field, series[].columns, and the
-// axis column keys) against the source tables and returns the expanded document
-// plus warnings. Shared is the request-level table; seriesTables holds per-series
-// tables in the order SeriesSources lists them and may hold nils. Series errors
-// accumulate and identical ones collapse. Errors name the offending series or
-// axis so agents can self-correct.
-func Expand(optionJSON []byte, shared *source.Table, seriesTables []*source.Table) ([]byte, []string, error) {
+// axis column keys) against the source tables and returns the decoded option
+// with bindings expanded plus warnings. Shared is the request-level table;
+// seriesTables holds per-series tables in the order SeriesSources lists them
+// and may hold nils. Series errors accumulate and identical ones collapse.
+// Errors name the offending series or axis so agents can self-correct.
+func Expand(optionJSON []byte, shared *source.Table, seriesTables []*source.Table) (map[string]any, []string, error) {
 	var object map[string]any
 	if err := json.Unmarshal(optionJSON, &object); err != nil {
 		return nil, nil, fmt.Errorf("parse chart option: %w", err)
@@ -118,11 +118,7 @@ func Expand(optionJSON []byte, shared *source.Table, seriesTables []*source.Tabl
 	if shared != nil && !exp.usedShared {
 		warnings = append(warnings, "source ignored; no field or column bindings reference it")
 	}
-	expanded, err := json.Marshal(object)
-	if err != nil {
-		return nil, nil, err
-	}
-	return expanded, warnings, nil
+	return object, warnings, nil
 }
 
 // expander threads the shared table, per-series tables, and source-usage
@@ -276,7 +272,7 @@ func (e *expander) axes(object map[string]any) ([]string, bool, []string, error)
 	var labels []string
 	used := false
 	var warnings []string
-	if xAxis := objectList(object[keyXAxis]); len(xAxis) > 0 {
+	if xAxis := ObjectList(object[keyXAxis]); len(xAxis) > 0 {
 		resolved, axisWarnings, err := resolveAxisColumn("xAxis[0]", xAxis[0], e.shared)
 		if err != nil {
 			return nil, false, nil, err
@@ -285,12 +281,15 @@ func (e *expander) axes(object map[string]any) ([]string, bool, []string, error)
 		if resolved != nil {
 			labels = resolved
 			used = true
-		} else {
+		} else if items, ok := xAxis[0][keyData].([]any); ok {
 			// inline axis labels feed slice naming the same as a bound label column
-			labels = axisDataLabels(xAxis[0][keyData])
+			labels = make([]string, len(items))
+			for i, item := range items {
+				labels[i] = source.AsString(item)
+			}
 		}
 	}
-	for i, entry := range objectList(object[keyYAxis]) {
+	for i, entry := range ObjectList(object[keyYAxis]) {
 		resolved, axisWarnings, err := resolveAxisColumn(fmt.Sprintf("yAxis[%d]", i), entry, e.shared)
 		if err != nil {
 			return nil, false, nil, err
@@ -333,20 +332,6 @@ func resolveAxisColumn(path string, entry map[string]any, shared *source.Table) 
 	return labels, warnings, nil
 }
 
-// axisDataLabels converts an inline axis data array into label strings, matching
-// how a bound label column stringifies its cells.
-func axisDataLabels(value any) []string {
-	items, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	labels := make([]string, len(items))
-	for i, item := range items {
-		labels[i] = source.AsString(item)
-	}
-	return labels
-}
-
 // seriesRef locates one series entry within the option document.
 type seriesRef struct {
 	path  string
@@ -372,7 +357,7 @@ func expandSeries(ref seriesRef, labels []string, table *source.Table) ([]string
 			return nil, false, ref.failf("field-type", "%s: field must be a column name string")
 		}
 	}
-	columns := objectMap(series[keyColumns])
+	columns := ObjectMap(series[keyColumns])
 	if series[keyColumns] != nil && columns == nil {
 		return nil, false, ref.failf("columns-shape",
 			"%s: columns must be an object of {open, high, low, close} column names")
@@ -501,7 +486,13 @@ func expandFieldSeries(path string, series map[string]any, seriesType, field str
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	var warnings []string
-	if allNull(values) {
+	// every cell holding the gap sentinel means the column carries no numeric values
+	null := charts.GetNullValue()
+	allGaps := len(values) > 0 && !slices.ContainsFunc(values, func(value any) bool {
+		number, ok := value.(float64)
+		return !ok || number != null
+	})
+	if allGaps {
 		warnings = append(warnings, fmt.Sprintf(
 			"%s column %q has no numeric values; rendering as gaps", path, field))
 	}
@@ -597,7 +588,7 @@ func expandCandlestickSeries(path string, series map[string]any, columns map[str
 			return fmt.Errorf(
 				"%s: columns needs all four roles {open, high, low, close} mapping to column names", path)
 		}
-		values, err := lookupColumn(table, column)
+		values, err := lookupColumn(table, column, bindingSeries)
 		if err != nil {
 			return fmt.Errorf("%s: columns.%s: %w", path, role, err)
 		}
@@ -674,8 +665,8 @@ func validateRadarIndicators(object map[string]any, refs []seriesRef) error {
 	if path == "" {
 		return nil
 	}
-	radar := objectMap(object["radar"])
-	indicators := objectList(radar["indicator"])
+	radar := ObjectMap(object["radar"])
+	indicators := ObjectList(radar["indicator"])
 	if len(indicators) < 3 {
 		return fmt.Errorf("%s needs a radar.indicator block with at least three indicators; "+
 			"category labels do not build radar spokes", path)
@@ -683,24 +674,10 @@ func validateRadarIndicators(object map[string]any, refs []seriesRef) error {
 	return nil
 }
 
-// allNull reports whether every value is the gap sentinel.
-func allNull(values []any) bool {
-	if len(values) == 0 {
-		return false
-	}
-	null := charts.GetNullValue()
-	for _, value := range values {
-		if number, ok := value.(float64); !ok || number != null {
-			return false
-		}
-	}
-	return true
-}
-
 // numericColumn converts a table column into numeric values; missing, empty,
 // and '-' cells map to the library null sentinel and render as gaps.
 func numericColumn(table *source.Table, name string) ([]any, error) {
-	values, err := lookupColumn(table, name)
+	values, err := lookupColumn(table, name, bindingSeries)
 	if err != nil {
 		return nil, err
 	}
@@ -722,7 +699,7 @@ func numericColumn(table *source.Table, name string) ([]any, error) {
 
 // labelColumn converts a table column into label strings.
 func labelColumn(table *source.Table, name string) ([]string, error) {
-	values, err := lookupAxisColumn(table, name)
+	values, err := lookupColumn(table, name, bindingAxis)
 	if err != nil {
 		return nil, err
 	}
@@ -733,33 +710,33 @@ func labelColumn(table *source.Table, name string) ([]string, error) {
 	return labels, nil
 }
 
-// lookupColumn resolves a column name against the table backing a series
-// binding; the top-level source or this series' own source may supply it.
-func lookupColumn(table *source.Table, name string) ([]any, error) {
+// lookupColumn binding contexts; axis bindings read only the top-level source,
+// never a per-series one, which the error copy names.
+const (
+	bindingSeries = "series"
+	bindingAxis   = "axis"
+)
+
+// lookupColumn resolves a column name against the table backing a series or
+// axis binding; binding selects the context-specific error copy.
+func lookupColumn(table *source.Table, name, binding string) ([]any, error) {
 	if table == nil {
+		if binding == bindingAxis {
+			return nil, fmt.Errorf("column %q requires a data source; no top-level source is present "+
+				"and axis column bindings never read per-series sources. Set the top-level source or "+
+				"supply inline labels through axis data", name)
+		}
 		return nil, fmt.Errorf("column %q requires a data source; set the top-level source or "+
 			"this series' own source, or switch to inline data", name)
 	}
 	index, ok := table.ColumnIndex(name)
 	if !ok {
-		return nil, fmt.Errorf("column %q not found%s; available columns: %s",
-			name, caseHint(name, table.Columns), strings.Join(table.Columns, ", "))
-	}
-	return table.ColumnValues(index), nil
-}
-
-// lookupAxisColumn resolves a column name against the top-level source backing
-// an axis binding; axes never read per-series sources.
-func lookupAxisColumn(table *source.Table, name string) ([]any, error) {
-	if table == nil {
-		return nil, fmt.Errorf("column %q requires a data source; no top-level source is present "+
-			"and axis column bindings never read per-series sources. Set the top-level source or "+
-			"supply inline labels through axis data", name)
-	}
-	index, ok := table.ColumnIndex(name)
-	if !ok {
-		return nil, fmt.Errorf("column %q not found in the top-level source%s; available columns: %s",
-			name, caseHint(name, table.Columns), strings.Join(table.Columns, ", "))
+		where := ""
+		if binding == bindingAxis {
+			where = " in the top-level source"
+		}
+		return nil, fmt.Errorf("column %q not found%s%s; available columns: %s",
+			name, where, caseHint(name, table.Columns), strings.Join(table.Columns, ", "))
 	}
 	return table.ColumnValues(index), nil
 }
@@ -774,9 +751,9 @@ func caseHint(name string, columns []string) string {
 	return ""
 }
 
-// objectList decodes a value that may be one object, an array of objects, or
-// absent.
-func objectList(value any) []map[string]any {
+// ObjectList decodes a value that may be one object, an array of objects, or
+// absent; non-object array entries are skipped.
+func ObjectList(value any) []map[string]any {
 	switch typed := value.(type) {
 	case map[string]any:
 		return []map[string]any{typed}
@@ -793,8 +770,8 @@ func objectList(value any) []map[string]any {
 	}
 }
 
-// objectMap returns value as an object, or nil when it is anything else.
-func objectMap(value any) map[string]any {
+// ObjectMap returns value as an object, or nil when it is anything else.
+func ObjectMap(value any) map[string]any {
 	object, _ := value.(map[string]any)
 	return object
 }

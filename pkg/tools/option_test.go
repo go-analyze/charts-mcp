@@ -8,19 +8,21 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/go-analyze/charts-mcp/pkg/chart"
 )
 
 func TestSanitizeOptionStripsIntolerantShapes(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{
+	object := decodeOption(t, `{
 		"series": [
 			{"type": "bar", "data": [1, 2], "barWidth": 40,
 				"markPoint": {"data": [{"type": "max"}, {"xAxis": "Wed", "yAxis": 2}]}},
 			{"type": "bar", "data": [3, 4], "barGap": 8}
 		]
 	}`)
-	sanitized, warnings, err := sanitizeOption(raw)
+	warnings, err := sanitizeOption(object)
 	require.NoError(t, err)
 
 	joined := joinWarnings(warnings)
@@ -29,54 +31,48 @@ func TestSanitizeOptionStripsIntolerantShapes(t *testing.T) {
 	assert.Contains(t, joined, "series[0].markPoint.data[1].xAxis is not rendered, removed")
 	assert.Contains(t, joined, "series[0].markPoint.data[1].yAxis is not rendered, removed")
 
-	var object struct {
-		Series []struct {
-			BarWidth  any `json:"barWidth"`
-			BarGap    any `json:"barGap"`
-			MarkPoint struct {
-				Data []map[string]any `json:"data"`
-			} `json:"markPoint"`
-		} `json:"series"`
-	}
-	require.NoError(t, json.Unmarshal(sanitized, &object))
-	require.Len(t, object.Series, 2)
-	assert.Nil(t, object.Series[0].BarWidth)
-	assert.Nil(t, object.Series[1].BarGap)
-	require.Len(t, object.Series[0].MarkPoint.Data, 2)
-	assert.Equal(t, "max", object.Series[0].MarkPoint.Data[0]["type"])
-	assert.NotContains(t, object.Series[0].MarkPoint.Data[1], "xAxis")
-	assert.NotContains(t, object.Series[0].MarkPoint.Data[1], "yAxis")
+	series := chart.ObjectList(object["series"])
+	require.Len(t, series, 2)
+	assert.Nil(t, series[0]["barWidth"])
+	assert.Nil(t, series[1]["barGap"])
+	markData := chart.ObjectList(chart.ObjectMap(series[0]["markPoint"])["data"])
+	require.Len(t, markData, 2)
+	assert.Equal(t, "max", markData[0]["type"])
+	assert.NotContains(t, markData[1], "xAxis")
+	assert.NotContains(t, markData[1], "yAxis")
 }
 
 func TestSanitizeOptionKeepsPercentSizing(t *testing.T) {
 	t.Parallel()
 
-	sanitized, warnings, err := sanitizeOption([]byte(
-		`{"series": [{"type": "bar", "data": [1, 2], "barWidth": "35%", "barGap": "20%"}]}`))
+	object := decodeOption(t,
+		`{"series": [{"type": "bar", "data": [1, 2], "barWidth": "35%", "barGap": "20%"}]}`)
+	warnings, err := sanitizeOption(object)
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
-	assert.JSONEq(t, `{"series": [{"type": "bar", "data": [1, 2], "barWidth": "35%", "barGap": "20%"}]}`,
-		string(sanitized))
+	assert.Equal(t, map[string]any{
+		"series": []any{map[string]any{
+			"type": "bar", "data": []any{1.0, 2.0}, "barWidth": "35%", "barGap": "20%",
+		}},
+	}, object)
 }
 
 func TestSanitizeOptionGradientColorStops(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{"series": [{"type": "line", "data": [1],
+	object := decodeOption(t, `{"series": [{"type": "line", "data": [1],
 		"areaStyle": {"color": {"colorStops": [{"offset": 0, "color": "red"}]}}}],
 		"backgroundColor": {"gradient": true},
 		"yAxis": [{"axisLabel": {"formatter": {"func": true}}}]}`)
 
-	sanitized, warnings, err := sanitizeOption(raw)
+	warnings, err := sanitizeOption(object)
 	require.NoError(t, err)
 
-	var object map[string]any
-	require.NoError(t, json.Unmarshal(sanitized, &object))
 	assert.Nil(t, object["backgroundColor"])
-	series := object["series"].([]any)[0].(map[string]any)
+	series := chart.ObjectList(object["series"])[0]
 	assert.Empty(t, series["areaStyle"]) // gradient color removed
-	yAxis := object["yAxis"].([]any)[0].(map[string]any)
-	axisLabel := yAxis["axisLabel"].(map[string]any)
+	yAxis := chart.ObjectList(object["yAxis"])[0]
+	axisLabel := chart.ObjectMap(yAxis["axisLabel"])
 	assert.NotContains(t, axisLabel, "formatter") // non-string formatter removed
 
 	require.Len(t, warnings, 3)
@@ -89,34 +85,25 @@ func TestSanitizeOptionGradientColorStops(t *testing.T) {
 func TestSanitizeOptionStringColorsPass(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{"backgroundColor": "#123", "series": [{"type": "line",
-		"data": [1], "areaStyle": {"color": "blue"}}]}`)
+	raw := `{"backgroundColor": "#123", "series": [{"type": "line",
+		"data": [1], "areaStyle": {"color": "blue"}}]}`
 
-	sanitized, warnings, err := sanitizeOption(raw)
+	object := decodeOption(t, raw)
+	warnings, err := sanitizeOption(object)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(raw), string(sanitized))
+	assert.Equal(t, decodeOption(t, raw), object)
 	// the gradient-free fill color decodes fine but is documented as parsed-only
 	assert.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "series[0].areaStyle.color is accepted but not rendered")
 }
 
-func TestSanitizeOptionInvalidJSONErrors(t *testing.T) {
-	t.Parallel()
-
-	raw := []byte(`{not json`)
-	sanitized, warnings, err := sanitizeOption(raw)
-	require.ErrorContains(t, err, "parse chart option")
-	assert.Nil(t, sanitized)
-	assert.Empty(t, warnings)
-}
-
 func TestLintIgnoredTopLevel(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{"type": "line", "theme": "cyberpunk",
-		"series": [{"type": "line", "data": [1]}]}`)
+	raw := `{"type": "line", "theme": "cyberpunk",
+		"series": [{"type": "line", "data": [1]}]}`
 
-	_, warnings, err := sanitizeOption(raw)
+	warnings, err := sanitizeOption(decodeOption(t, raw))
 	require.NoError(t, err)
 
 	joined := joinWarnings(warnings)
@@ -130,29 +117,30 @@ func TestSanitizeOptionIgnoresUnknownKeys(t *testing.T) {
 
 	// unknown keys pass through untouched; they may decode in the library, and
 	// tracking that surface here would drift out of sync
-	raw := []byte(`{"tooltip": {}, "fontFamily": "roboto",
+	raw := `{"tooltip": {}, "fontFamily": "roboto",
 		"series": [{"type": "line", "data": [1], "gap": 5}],
-		"xAxis": {"boundaryGap": false, "data": ["a"]}}`)
+		"xAxis": {"boundaryGap": false, "data": ["a"]}}`
 
-	sanitized, warnings, err := sanitizeOption(raw)
+	object := decodeOption(t, raw)
+	warnings, err := sanitizeOption(object)
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
-	assert.JSONEq(t, string(raw), string(sanitized))
+	assert.Equal(t, decodeOption(t, raw), object)
 }
 
 func TestLintIgnoredFieldsWarns(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{
+	raw := `{
 		"title": {"text": "t", "backgroundColor": "#fff"},
 		"series": [{"type": "line", "data": [1], "max": 9, "areaStyle": {"color": "blue"},
 			"markPoint": {"data": [{"xAxis": 3}]}},
 			{"type": "bar", "data": [2], "barCategoryGap": "20%"}],
 		"xAxis": [{"axisLabel": {"formatter": "{value}"}, "axisLine": {"show": true,
 			"lineStyle": {"width": 3}}}]
-	}`)
+	}`
 
-	_, warnings, err := sanitizeOption(raw)
+	warnings, err := sanitizeOption(decodeOption(t, raw))
 	require.NoError(t, err)
 	joined := strings.Join(warnings, "\n")
 	for _, fragment := range []string{
@@ -168,22 +156,21 @@ func TestLintDimensions(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{"width set without height; defaulted height to 400"},
-		lintDimensions([]byte(`{"series": [], "width": 640}`)))
+		lintDimensions(decodeOption(t, `{"series": [], "width": 640}`)))
 	assert.Equal(t, []string{"height set without width; defaulted width to 600"},
-		lintDimensions([]byte(`{"height": 480}`)))
-	assert.Empty(t, lintDimensions([]byte(`{"width": 640, "height": 480}`)))
-	assert.Empty(t, lintDimensions([]byte(`{"series": []}`)))
-	assert.Empty(t, lintDimensions([]byte(`{invalid`)))
+		lintDimensions(decodeOption(t, `{"height": 480}`)))
+	assert.Empty(t, lintDimensions(decodeOption(t, `{"width": 640, "height": 480}`)))
+	assert.Empty(t, lintDimensions(decodeOption(t, `{"series": []}`)))
 }
 
 func TestEffectiveDimensions(t *testing.T) {
 	t.Parallel()
 
-	width, height := effectiveDimensions([]byte(`{"width": 1600}`))
+	width, height := effectiveDimensions(decodeOption(t, `{"width": 1600}`))
 	assert.Equal(t, 1600, width)
 	assert.Equal(t, defaultChartHeight, height) // unset dimension keeps its default
 
-	width, height = effectiveDimensions([]byte(`{}`))
+	width, height = effectiveDimensions(decodeOption(t, `{}`))
 	assert.Equal(t, defaultChartWidth, width)
 	assert.Equal(t, defaultChartHeight, height)
 }
@@ -233,16 +220,16 @@ func TestDecodeErrorNamesOptionField(t *testing.T) {
 func TestLintChartWideSeriesKeys(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{
+	raw := `{
 		"series": [
 			{"type": "line", "data": [1], "smooth": true},
 			{"type": "bar", "data": [2], "symbolSize": 9, "areaStyle": {},
 				"lineStyle": {"width": 3}},
 			{"type": "line", "data": [3], "smooth": null}
 		]
-	}`)
+	}`
 
-	_, warnings, err := sanitizeOption(raw)
+	warnings, err := sanitizeOption(decodeOption(t, raw))
 	require.NoError(t, err)
 
 	joined := joinWarnings(warnings)
@@ -260,16 +247,17 @@ func TestLintChartWideSeriesKeys(t *testing.T) {
 func TestLintContinuousAxisTypeAndFunnelPercent(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{
+	raw := `{
 		"xAxis": [{"type": "time", "data": ["a"]}],
 		"yAxis": {"type": "log"},
 		"series": [
 			{"type": "funnel", "label": {"formatter": "{b}: {d}%"}, "data": [1]},
 			{"type": "pie", "label": {"formatter": "{d}%"}}
 		]
-	}`)
+	}`
 
-	sanitized, warnings, err := sanitizeOption(raw)
+	object := decodeOption(t, raw)
+	warnings, err := sanitizeOption(object)
 	require.NoError(t, err)
 
 	joined := joinWarnings(warnings)
@@ -280,28 +268,21 @@ func TestLintContinuousAxisTypeAndFunnelPercent(t *testing.T) {
 	// pie computes {d}, so it stays untouched
 	assert.NotContains(t, joined, "series[1]")
 
-	var object struct {
-		Series []struct {
-			Label struct {
-				Formatter string `json:"formatter"`
-			} `json:"label"`
-		} `json:"series"`
-	}
-	require.NoError(t, json.Unmarshal(sanitized, &object))
-	assert.Equal(t, "{b}:", object.Series[0].Label.Formatter)
-	assert.Equal(t, "{d}%", object.Series[1].Label.Formatter)
+	series := chart.ObjectList(object["series"])
+	assert.Equal(t, "{b}:", chart.ObjectMap(series[0]["label"])["formatter"])
+	assert.Equal(t, "{d}%", chart.ObjectMap(series[1]["label"])["formatter"])
 }
 
 func TestLintScopeStructures(t *testing.T) {
 	t.Parallel()
 
 	t.Run("warns", func(t *testing.T) {
-		raw := []byte(`{
+		raw := `{
 			"xAxis": [{"data": ["a"]}, {"data": ["b"], "splitNumber": 4}],
 			"series": [{"type": "line", "data": [1]}]
-		}`)
+		}`
 
-		_, warnings, err := sanitizeOption(raw)
+		warnings, err := sanitizeOption(decodeOption(t, raw))
 		require.NoError(t, err)
 		assert.Contains(t, joinWarnings(warnings),
 			"xAxis has 2 entries; only the first renders and the rest are ignored")
@@ -309,34 +290,35 @@ func TestLintScopeStructures(t *testing.T) {
 
 	t.Run("out of range axis index errors", func(t *testing.T) {
 		// silent fallback would draw every series on one scale
-		raw := []byte(`{
+		raw := `{
 			"yAxis": [{"name": "n"}],
 			"series": [{"type": "line", "data": [1], "yAxisIndex": 3}]
-		}`)
+		}`
 
-		_, _, err := sanitizeOption(raw)
+		_, err := sanitizeOption(decodeOption(t, raw))
 		require.ErrorContains(t, err,
 			"series[0].yAxisIndex 3 references a missing yAxis entry (1 declared); add the axis entry or drop the index")
 	})
 
 	t.Run("clean", func(t *testing.T) {
-		raw := []byte(`{
+		raw := `{
 			"xAxis": [{"data": ["a"]}],
 			"yAxis": [{}, {}],
 			"series": [{"type": "line", "data": [1], "yAxisIndex": 1}]
-		}`)
+		}`
 
-		sanitized, warnings, err := sanitizeOption(raw)
+		object := decodeOption(t, raw)
+		warnings, err := sanitizeOption(object)
 		require.NoError(t, err)
 		assert.Empty(t, warnings)
-		assert.JSONEq(t, string(raw), string(sanitized))
+		assert.Equal(t, decodeOption(t, raw), object)
 	})
 
 	t.Run("default axis index", func(t *testing.T) {
 		// yAxisIndex 0 without declared axes keeps the implicit default axis
-		raw := []byte(`{"series": [{"type": "line", "data": [1], "yAxisIndex": 0}]}`)
+		raw := `{"series": [{"type": "line", "data": [1], "yAxisIndex": 0}]}`
 
-		_, warnings, err := sanitizeOption(raw)
+		warnings, err := sanitizeOption(decodeOption(t, raw))
 		require.NoError(t, err)
 		assert.Empty(t, warnings)
 	})
@@ -344,4 +326,13 @@ func TestLintScopeStructures(t *testing.T) {
 
 func joinWarnings(warnings []string) string {
 	return strings.Join(warnings, "\n")
+}
+
+// decodeOption decodes raw JSON into a generic option object.
+func decodeOption(t *testing.T, raw string) map[string]any {
+	t.Helper()
+
+	var object map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &object))
+	return object
 }

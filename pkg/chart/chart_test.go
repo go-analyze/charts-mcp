@@ -1,6 +1,7 @@
 package chart
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,22 @@ func table(t *testing.T, columns []string, rows ...[]any) *source.Table {
 	built, err := source.FromColumns(columns, rows)
 	require.NoError(t, err)
 	return built
+}
+
+// optionJSON encodes an expanded option object for JSONEq assertions.
+func optionJSON(t *testing.T, object map[string]any) string {
+	t.Helper()
+
+	encoded, err := json.Marshal(object)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+func TestExpandInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := Expand([]byte(`{not json`), nil, nil)
+	require.ErrorContains(t, err, "parse chart option")
 }
 
 func TestExpandFieldToData(t *testing.T) {
@@ -33,7 +50,7 @@ func TestExpandFieldToData(t *testing.T) {
 	assert.JSONEq(t, `{"theme": "dark",
 		"xAxis": {"data": ["Jan", "Feb", "Mar"]},
 		"series": [{"type": "line", "name": "revenue", "data": [120, 90, 1.7976931348623157e+308]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandFieldNamesPieSlicesFromAxis(t *testing.T) {
@@ -51,7 +68,7 @@ func TestExpandFieldNamesPieSlicesFromAxis(t *testing.T) {
 	assert.JSONEq(t, `{"xAxis": {"data": ["Direct", "Email"]},
 		"series": [{"type": "pie", "name": "visits", "data": [
 			{"value": 335, "name": "Direct"}, {"value": 310, "name": "Email"}]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandPieWithoutLabelsWarns(t *testing.T) {
@@ -79,7 +96,7 @@ func TestExpandInline(t *testing.T) {
 		expanded, warnings, err := Expand(option, nil, nil)
 		require.NoError(t, err)
 		assert.Empty(t, warnings)
-		assert.JSONEq(t, string(option), string(expanded))
+		assert.JSONEq(t, string(option), optionJSON(t, expanded))
 	})
 
 	t.Run("named_from_axis", func(t *testing.T) {
@@ -92,7 +109,7 @@ func TestExpandInline(t *testing.T) {
 		assert.JSONEq(t, `{"xAxis": {"data": ["Chrome", "Safari"]},
 			"series": [{"type": "pie", "name": "Share", "data": [
 				{"value": 1048, "name": "Chrome"}, {"value": 735, "name": "Safari"}]}]}`,
-			string(expanded))
+			optionJSON(t, expanded))
 	})
 
 	t.Run("keeps_item_names", func(t *testing.T) {
@@ -102,7 +119,7 @@ func TestExpandInline(t *testing.T) {
 		expanded, warnings, err := Expand(option, nil, nil)
 		require.NoError(t, err)
 		assert.Empty(t, warnings) // pre-named items stay untouched, no label warnings
-		assert.JSONEq(t, string(option), string(expanded))
+		assert.JSONEq(t, string(option), optionJSON(t, expanded))
 	})
 
 	t.Run("without_labels_warns", func(t *testing.T) {
@@ -126,7 +143,7 @@ func TestExpandRadarFieldBecomesPolygonTuple(t *testing.T) {
 	assert.Empty(t, warnings)
 	assert.JSONEq(t, `{"radar": {"indicator": [{"name": "speed"}, {"name": "power"}, {"name": "range"}]},
 		"series": [{"type": "radar", "name": "A", "data": [{"name": "A", "value": [5]}]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandRadarColumnPolygons(t *testing.T) {
@@ -146,7 +163,7 @@ func TestExpandRadarColumnPolygons(t *testing.T) {
 		"series": [
 			{"type": "radar", "name": "speed", "data": [{"name": "speed", "value": [5, 4]}]},
 			{"type": "radar", "name": "power", "data": [{"name": "power", "value": [7, 8]}]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandCandlestickColumns(t *testing.T) {
@@ -163,7 +180,7 @@ func TestExpandCandlestickColumns(t *testing.T) {
 	// tuples assemble in ECharts order [open, close, lowest, highest]
 	assert.JSONEq(t, `{"series": [{"type": "candlestick",
 		"data": [[10, 14, 9, 15], [14, 12, 11, 16]]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandPerSeriesSourceOverridesShared(t *testing.T) {
@@ -181,7 +198,7 @@ func TestExpandPerSeriesSourceOverridesShared(t *testing.T) {
 	assert.JSONEq(t, `{"series": [
 		{"type": "bar", "name": "val", "data": [1, 2]},
 		{"type": "bar", "name": "num", "data": [7, 8]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandYAxisColumnLabels(t *testing.T) {
@@ -196,7 +213,7 @@ func TestExpandYAxisColumnLabels(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"yAxis": [{"type": "category", "data": ["build", "test"]}],
 		"series": [{"type": "bar", "name": "days", "data": [1, 4]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandUnusedSourceWarns(t *testing.T) {
@@ -329,7 +346,7 @@ func TestExpandImplicitBindingOwnSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, warnings) // the sole numeric column is deterministic, so binding is silent
 	assert.JSONEq(t, `{"series": [{"type": "line", "name": "Hits", "data": [7, 8]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandImplicitBindingSharedSource(t *testing.T) {
@@ -343,7 +360,7 @@ func TestExpandImplicitBindingSharedSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, warnings) // the binding consumes the source, so no ignored note either
 	assert.JSONEq(t, `{"series": [{"type": "bar", "name": "Revenue", "data": [120, 90]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandImplicitBindingExcludesStructuredTypes(t *testing.T) {
@@ -403,7 +420,7 @@ func TestExpandEmptyBindingsTreatedAsUnset(t *testing.T) {
 	assert.Empty(t, warnings) // empty bindings bind silently too
 	assert.JSONEq(t, `{"xAxis": {"data": ["A", "B"]},
 		"series": [{"type": "line", "name": "A", "data": [120, 90]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestSeriesEchoSummarizesCollections(t *testing.T) {
@@ -439,7 +456,7 @@ func TestExpandAxisColumnReplacesInlineData(t *testing.T) {
 	assert.Contains(t, warnings[0], "xAxis[0] sets both column and data; the bound column replaces the inline labels")
 	assert.JSONEq(t, `{"xAxis": {"data": ["Jan", "Feb"]},
 		"series": [{"type": "line", "name": "revenue", "data": [120, 90]}]}`,
-		string(expanded))
+		optionJSON(t, expanded))
 }
 
 func TestExpandCandlestickMissingCellErrors(t *testing.T) {

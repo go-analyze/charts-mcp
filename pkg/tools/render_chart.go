@@ -135,12 +135,16 @@ func handleRenderChart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 		return toolError("%s", err.Error())
 	}
 
-	optionJSON, warnings, err := args.buildOption()
+	option, warnings, err := args.buildOption()
+	if err != nil {
+		return toolError("%s", err.Error())
+	}
+	finalized, err := json.Marshal(option)
 	if err != nil {
 		return toolError("%s", err.Error())
 	}
 
-	image, err := renderImage(optionJSON, format)
+	image, err := renderImage(finalized, format)
 	if err != nil {
 		return toolError("%s", err.Error())
 	}
@@ -153,9 +157,9 @@ func handleRenderChart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	if result.Warnings == nil {
 		result.Warnings = []string{} // always an array, never null
 	}
-	result.Width, result.Height = effectiveDimensions(optionJSON)
-	result.Theme = resolvedTheme(optionJSON)
-	result.Series = countSeries(optionJSON)
+	result.Width, result.Height = effectiveDimensions(option)
+	result.Theme = resolvedTheme(option)
+	result.Series = countSeries(option)
 	if note := largeCanvasWarning(result.Width, result.Height); note != "" {
 		result.Warnings = append(result.Warnings, note)
 	}
@@ -172,9 +176,10 @@ func handleRenderChart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	return structuredResult(text, result)
 }
 
-// buildOption produces the finalized option JSON for rendering plus any
-// warnings: source loading, binding expansion, then the sanitize pass.
-func (a renderArgs) buildOption() ([]byte, []string, error) {
+// buildOption produces the finalized option document plus any warnings: source
+// loading, binding expansion, then the sanitize pass. The caller encodes the
+// returned option once for rendering and stats.
+func (a renderArgs) buildOption() (map[string]any, []string, error) {
 	if isEmptyOption(a.Option) {
 		return nil, nil, errors.New(
 			"chart option is empty; pass an ECharts option with at least one series beside source and output")
@@ -207,13 +212,13 @@ func (a renderArgs) buildOption() ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	sanitized, sanitizeWarnings, err := sanitizeOption(expanded)
+	sanitizeWarnings, err := sanitizeOption(expanded)
 	if err != nil {
 		return nil, nil, err
 	}
 	warnings = append(warnings, sanitizeWarnings...)
-	warnings = append(warnings, lintDimensions(sanitized)...)
-	return sanitized, warnings, nil
+	warnings = append(warnings, lintDimensions(expanded)...)
+	return expanded, warnings, nil
 }
 
 // isEmptyOption reports whether the stripped option document carries no fields,
@@ -309,36 +314,16 @@ func decodeError(err error) string {
 
 // resolvedTheme reports the palette a render used: the named theme when known,
 // light for unset or unknown names.
-func resolvedTheme(optionJSON []byte) string {
-	var parsed struct {
-		Theme string `json:"theme"`
-	}
-	if err := json.Unmarshal(optionJSON, &parsed); err != nil {
-		return charts.ThemeLight
-	}
-	if parsed.Theme != "" && chart.KnownTheme(parsed.Theme) {
-		return parsed.Theme
+func resolvedTheme(object map[string]any) string {
+	if theme, _ := object["theme"].(string); theme != "" && chart.KnownTheme(theme) {
+		return theme
 	}
 	return charts.ThemeLight
 }
 
 // countSeries reports the number of series entries the option renders.
-func countSeries(optionJSON []byte) int {
-	var parsed struct {
-		Series json.RawMessage `json:"series"`
-	}
-	if err := json.Unmarshal(optionJSON, &parsed); err != nil || len(parsed.Series) == 0 {
-		return 0
-	}
-	var list []map[string]any
-	if err := json.Unmarshal(parsed.Series, &list); err == nil {
-		return len(list)
-	}
-	var single map[string]any
-	if err := json.Unmarshal(parsed.Series, &single); err == nil && single != nil {
-		return 1
-	}
-	return 0
+func countSeries(object map[string]any) int {
+	return len(chart.ObjectList(object["series"]))
 }
 
 // writeChartFile writes rendered bytes to the output path, creating parent
