@@ -240,6 +240,7 @@ func TestRenderUnknownThemeWarns(t *testing.T) {
 	warnings := strings.Join(structured.Warnings, "\n")
 	assert.Contains(t, warnings, "unknown theme \"cyberpunk-neon\"")
 	assert.Contains(t, warnings, "valid themes:") // the names are listed for self-correction
+	assert.Equal(t, "light", structured.Theme)    // the fallback palette is reported
 }
 
 func TestRenderAxisColumnOverInlineDataWarns(t *testing.T) {
@@ -305,8 +306,24 @@ func TestRenderImplicitBindingRenders(t *testing.T) {
 
 	structured, ok := result.StructuredContent.(renderResult)
 	require.True(t, ok)
-	assert.Contains(t, strings.Join(structured.Warnings, "\n"),
-		`series[0] implicitly bound column "revenue"; pass inline data or set field to bind explicitly`)
+	// unambiguous implicit binding stays silent so warnings stay meaningful
+	assert.NotNil(t, structured.Warnings) // never null, even when empty
+	assert.Empty(t, structured.Warnings)
+	assert.Equal(t, 1, structured.Series)
+	assert.Equal(t, "light", structured.Theme)
+}
+
+func TestRenderCandlestickImplicitBindingRejected(t *testing.T) {
+	t.Parallel()
+
+	// a lone close column would render flat [v,v,v,v] candles
+	args := map[string]any{
+		"source": map[string]any{"csv": "day,close\nMon,1.5\n"},
+		"series": []any{map[string]any{"type": "candlestick", "name": "px"}},
+		"output": map[string]any{"path": filepath.Join(t.TempDir(), "ohlc.svg")},
+	}
+	result, err := handleRenderChart(t.Context(), callRequest(t, renderChartName, args))
+	requireErrorResult(t, result, err, "series[0] needs OHLC data")
 }
 
 func TestRenderChartWideStylingOnSeriesZero(t *testing.T) {
@@ -383,6 +400,8 @@ func TestRenderReportsEffectiveDimensions(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 1600, structured.Width)
 	assert.Equal(t, defaultChartHeight, structured.Height)
+	assert.Equal(t, "dark", structured.Theme) // lineChartArgs renders on the dark palette
+	assert.Equal(t, 1, structured.Series)
 	assert.Contains(t, strings.Join(structured.Warnings, "\n"),
 		"width set without height; defaulted height to 400")
 }

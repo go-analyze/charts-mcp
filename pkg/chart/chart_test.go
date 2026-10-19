@@ -1,7 +1,6 @@
 package chart
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -251,6 +250,10 @@ func TestExpandErrors(t *testing.T) {
 			"column \"profit\" not found; available columns: month, revenue",
 		},
 		{
+			"column case mismatch", `{"series": [{"type": "line", "field": "Revenue"}]}`,
+			`column "Revenue" not found (a "revenue" column exists; column names are case-sensitive)`,
+		},
+		{
 			"non-numeric column", `{"series": [{"type": "line", "field": "month"}]}`,
 			"has a non-numeric value at row 1",
 		},
@@ -324,9 +327,7 @@ func TestExpandImplicitBindingOwnSource(t *testing.T) {
 
 	expanded, warnings, err := Expand(option, nil, []*source.Table{own})
 	require.NoError(t, err)
-	assert.Equal(t, []string{
-		`series[0] implicitly bound column "hits"; pass inline data or set field to bind explicitly`,
-	}, warnings)
+	assert.Empty(t, warnings) // the sole numeric column is deterministic, so binding is silent
 	assert.JSONEq(t, `{"series": [{"type": "line", "name": "Hits", "data": [7, 8]}]}`,
 		string(expanded))
 }
@@ -340,10 +341,21 @@ func TestExpandImplicitBindingSharedSource(t *testing.T) {
 
 	expanded, warnings, err := Expand(option, shared, nil)
 	require.NoError(t, err)
-	assert.Len(t, warnings, 1) // the implicit binding consumes the source, no ignored note
-	assert.Contains(t, warnings[0], `implicitly bound column "revenue"`)
+	assert.Empty(t, warnings) // the binding consumes the source, so no ignored note either
 	assert.JSONEq(t, `{"series": [{"type": "bar", "name": "Revenue", "data": [120, 90]}]}`,
 		string(expanded))
+}
+
+func TestExpandImplicitBindingExcludesStructuredTypes(t *testing.T) {
+	t.Parallel()
+
+	shared := table(t, []string{"day", "close"}, []any{"Mon", 1.5})
+	_, _, err := Expand([]byte(`{"series": [{"type": "candlestick", "name": "px"}]}`), shared, nil)
+	require.ErrorContains(t, err,
+		"series[0] needs OHLC data; set columns {open, high, low, close} to source columns")
+
+	_, _, err = Expand([]byte(`{"series": [{"type": "violin", "name": "v"}]}`), shared, nil)
+	require.ErrorContains(t, err, "series[0] needs extent pairs; pass inline [min, max] tuples")
 }
 
 func TestExpandImplicitBindingAmbiguous(t *testing.T) {
@@ -388,27 +400,29 @@ func TestExpandEmptyBindingsTreatedAsUnset(t *testing.T) {
 
 	expanded, warnings, err := Expand(option, shared, nil)
 	require.NoError(t, err)
-	assert.Contains(t, strings.Join(warnings, "\n"), `implicitly bound column "revenue"`)
-	assert.NotContains(t, strings.Join(warnings, "\n"), "sets both column and data")
+	assert.Empty(t, warnings) // empty bindings bind silently too
 	assert.JSONEq(t, `{"xAxis": {"data": ["A", "B"]},
 		"series": [{"type": "line", "name": "A", "data": [120, 90]}]}`,
 		string(expanded))
 }
 
-func TestSeriesEchoTruncatesOnlyLongEntries(t *testing.T) {
+func TestSeriesEchoSummarizesCollections(t *testing.T) {
 	t.Parallel()
 
-	// entries a sender could diff against intent stay whole
+	// scalar keys stay verbatim so a sender can diff intent
 	full := seriesEcho(map[string]any{"type": "line", "name": "Visits", "yAxisIndex": 0})
-	assert.NotContains(t, full, "...")
+	assert.Equal(t, `(received: {"name":"Visits","type":"line","yAxisIndex":0})`, full)
 
+	// collections summarize to their size instead of echoing whole datasets
 	var long []any
 	for i := 0; i < 700; i++ {
 		long = append(long, 1.0)
 	}
-	truncated := seriesEcho(map[string]any{"type": "line", "data": long})
-	assert.Contains(t, truncated, "...")
-	assert.Less(t, len(truncated), 1100)
+	echo := seriesEcho(map[string]any{"type": "line", "data": long,
+		"label": map[string]any{"show": true, "color": "red"}})
+	assert.Contains(t, echo, `"data":[700 items]`)
+	assert.Contains(t, echo, `"label":{2 keys}`)
+	assert.Less(t, len(echo), 120)
 }
 
 func TestExpandAxisColumnReplacesInlineData(t *testing.T) {

@@ -269,16 +269,27 @@ func TestLintContinuousAxisTypeAndFunnelPercent(t *testing.T) {
 		]
 	}`)
 
-	_, warnings, err := sanitizeOption(raw)
+	sanitized, warnings, err := sanitizeOption(raw)
 	require.NoError(t, err)
 
 	joined := joinWarnings(warnings)
 	assert.Contains(t, joined, `xAxis[0].type "time" counts as category; there is no continuous axis`)
 	assert.Contains(t, joined, `yAxis[0].type "log" counts as category; there is no continuous axis`)
 	assert.Contains(t, joined,
-		"series[0].label.formatter {d} is not computed on funnel; percent tokens render as 0")
-	// pie computes {d}, so it stays silent
+		"series[0].label.formatter {d} is not computed on funnel, removed; {a}, {b}, and {c} still render")
+	// pie computes {d}, so it stays untouched
 	assert.NotContains(t, joined, "series[1]")
+
+	var object struct {
+		Series []struct {
+			Label struct {
+				Formatter string `json:"formatter"`
+			} `json:"label"`
+		} `json:"series"`
+	}
+	require.NoError(t, json.Unmarshal(sanitized, &object))
+	assert.Equal(t, "{b}:", object.Series[0].Label.Formatter)
+	assert.Equal(t, "{d}%", object.Series[1].Label.Formatter)
 }
 
 func TestLintScopeStructures(t *testing.T) {
@@ -287,20 +298,25 @@ func TestLintScopeStructures(t *testing.T) {
 	t.Run("warns", func(t *testing.T) {
 		raw := []byte(`{
 			"xAxis": [{"data": ["a"]}, {"data": ["b"], "splitNumber": 4}],
-			"yAxis": [{"name": "n"}],
-			"series": [
-				{"type": "line", "data": [1], "yAxisIndex": 3},
-				{"type": "bar", "data": [2]}
-			]
+			"series": [{"type": "line", "data": [1]}]
 		}`)
 
 		_, warnings, err := sanitizeOption(raw)
 		require.NoError(t, err)
+		assert.Contains(t, joinWarnings(warnings),
+			"xAxis has 2 entries; only the first renders and the rest are ignored")
+	})
 
-		joined := joinWarnings(warnings)
-		assert.Contains(t, joined, "xAxis has 2 entries; only the first renders and the rest are ignored")
-		assert.Contains(t, joined,
-			"series[0].yAxisIndex 3 references a missing yAxis entry (1 declared)")
+	t.Run("out of range axis index errors", func(t *testing.T) {
+		// silent fallback would draw every series on one scale
+		raw := []byte(`{
+			"yAxis": [{"name": "n"}],
+			"series": [{"type": "line", "data": [1], "yAxisIndex": 3}]
+		}`)
+
+		_, _, err := sanitizeOption(raw)
+		require.ErrorContains(t, err,
+			"series[0].yAxisIndex 3 references a missing yAxis entry (1 declared); add the axis entry or drop the index")
 	})
 
 	t.Run("clean", func(t *testing.T) {

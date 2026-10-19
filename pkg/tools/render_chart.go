@@ -45,8 +45,9 @@ func newRenderChartTool() mcp.Tool {
 		"Series data arrives inline (series[].data, native ECharts shapes) or bound to source columns " +
 		"through series[].field, series[].columns (candlestick OHLC), and xAxis.column / yAxis[].column " +
 		"(category labels). Every series must declare exactly one of those origins; a series holding only " +
-		"name/type/styling keys instead binds its table's sole numeric column implicitly, reported in " +
-		"warnings[], and errors only when zero or several numeric columns leave the choice ambiguous. " +
+		"name/type/styling keys silently binds its table's sole numeric column instead, and errors only " +
+		"when zero or several numeric columns leave the choice ambiguous. Candlestick and violin never " +
+		"bind implicitly: they need inline OHLC or extent tuples, or candlestick columns. " +
 		"Validation failures name the option path and echo the received entry as JSON, so compare that echo " +
 		"against the request and resend a corrected shape rather than an identical payload. All series are " +
 		"validated and identical failures collapse into one message naming the repeated paths. Charts render through the top-level " +
@@ -115,6 +116,8 @@ type renderResult struct {
 	Format   string   `json:"format"`
 	Bytes    int      `json:"bytes,omitempty"`
 	Path     string   `json:"path"`
+	Theme    string   `json:"theme"`
+	Series   int      `json:"series"`
 }
 
 // handleRenderChart renders the option document and writes it to the required
@@ -147,7 +150,12 @@ func handleRenderChart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 		Format:   format,
 		Bytes:    len(image),
 	}
+	if result.Warnings == nil {
+		result.Warnings = []string{} // always an array, never null
+	}
 	result.Width, result.Height = effectiveDimensions(optionJSON)
+	result.Theme = resolvedTheme(optionJSON)
+	result.Series = countSeries(optionJSON)
 	if note := largeCanvasWarning(result.Width, result.Height); note != "" {
 		result.Warnings = append(result.Warnings, note)
 	}
@@ -158,8 +166,8 @@ func handleRenderChart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	}
 	result.Path = written
 
-	text := fmt.Sprintf("rendered %s chart at %dx%d px (%.1f KB)",
-		result.Format, result.Width, result.Height, float64(result.Bytes)/1024)
+	text := fmt.Sprintf("rendered %s chart (%s theme) at %dx%d px (%.1f KB)",
+		result.Format, result.Theme, result.Width, result.Height, float64(result.Bytes)/1024)
 	text += "\nwritten to " + result.Path
 	return structuredResult(text, result)
 }
@@ -297,6 +305,40 @@ func decodeError(err error) string {
 		return fmt.Sprintf("option field %s: cannot unmarshal %s", path, got)
 	}
 	return fmt.Sprintf("cannot unmarshal %s (expected %s)", got, want)
+}
+
+// resolvedTheme reports the palette a render used: the named theme when known,
+// light for unset or unknown names.
+func resolvedTheme(optionJSON []byte) string {
+	var parsed struct {
+		Theme string `json:"theme"`
+	}
+	if err := json.Unmarshal(optionJSON, &parsed); err != nil {
+		return charts.ThemeLight
+	}
+	if parsed.Theme != "" && chart.KnownTheme(parsed.Theme) {
+		return parsed.Theme
+	}
+	return charts.ThemeLight
+}
+
+// countSeries reports the number of series entries the option renders.
+func countSeries(optionJSON []byte) int {
+	var parsed struct {
+		Series json.RawMessage `json:"series"`
+	}
+	if err := json.Unmarshal(optionJSON, &parsed); err != nil || len(parsed.Series) == 0 {
+		return 0
+	}
+	var list []map[string]any
+	if err := json.Unmarshal(parsed.Series, &list); err == nil {
+		return len(list)
+	}
+	var single map[string]any
+	if err := json.Unmarshal(parsed.Series, &single); err == nil && single != nil {
+		return 1
+	}
+	return 0
 }
 
 // writeChartFile writes rendered bytes to the output path, creating parent

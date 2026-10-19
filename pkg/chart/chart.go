@@ -1,7 +1,3 @@
-// Package chart resolves the tabular data bindings of a render_chart request.
-// The request body is an ECharts option whose series and axes may reference
-// source columns instead of inline data; Expand rewrites those references into
-// the native ECharts fields the renderer decodes.
 package chart
 
 import (
@@ -9,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/go-analyze/charts"
 
 	"github.com/go-analyze/charts-mcp/pkg/source"
@@ -393,11 +391,20 @@ func expandSeries(ref seriesRef, labels []string, table *source.Table) ([]string
 
 	var warnings []string
 	if !hasData && !hasField && columns == nil {
+		switch seriesType {
+		case charts.ChartTypeCandlestick:
+			// a lone numeric column would bind into flat [v,v,v,v] candles
+			return nil, false, ref.failf("needs-ohlc",
+				"%s needs OHLC data; set columns {open, high, low, close} to source columns, "+
+					"or pass inline [open, close, lowest, highest] tuples")
+		case charts.ChartTypeViolin, charts.ChartTypeHorizontalViolin:
+			// single values cannot form extent pairs
+			return nil, false, ref.failf("needs-extents",
+				"%s needs extent pairs; pass inline [min, max] tuples per category")
+		}
 		if column, ok := soleNumericColumn(table); ok {
+			// deterministic when the table has one numeric column, so no warning
 			field, hasField = column, true
-			warnings = append(warnings, fmt.Sprintf(
-				"%s implicitly bound column %q; pass inline data or set field to bind explicitly",
-				ref.path, column))
 		} else if series[keySource] != nil {
 			return nil, false, implicitBindingError(ref, table, "its source")
 		} else if table != nil {
@@ -619,21 +626,38 @@ func expandCandlestickSeries(path string, series map[string]any, columns map[str
 	return nil
 }
 
-// seriesEcho renders a series entry as compact JSON for error context, so a
-// stripped or misshapen payload is distinguishable from a missing one. Long
-// entries truncate.
+// seriesEcho renders a series entry compactly for error context, so a
+// stripped or misshapen payload is diagnosable without echoing whole datasets:
+// scalar values verbatim, arrays and objects summarized to their shape.
 func seriesEcho(series map[string]any) string {
-	encoded, err := json.Marshal(series)
-	if err != nil {
-		return ""
+	keys := bulk.MapKeysSlice(series)
+	slices.Sort(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, strconv.Quote(key)+":"+echoValue(series[key]))
 	}
-	// generous enough to keep whole fields diffable, capped so a huge data
-	// array cannot flood the error text
-	const limit = 1024
-	if len(encoded) > limit {
-		return "(received: " + string(encoded[:limit]) + "...)"
+	return "(received: {" + strings.Join(parts, ",") + "})"
+}
+
+// echoValue summarizes one entry value: scalars verbatim, collections as their
+// size, anything unexpected by type.
+func echoValue(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return "null"
+	case string:
+		return strconv.Quote(typed)
+	case bool:
+		return strconv.FormatBool(typed)
+	case int, int32, int64, float32, float64:
+		return fmt.Sprint(typed)
+	case []any:
+		return fmt.Sprintf("[%d items]", len(typed))
+	case map[string]any:
+		return fmt.Sprintf("{%d keys}", len(typed))
+	default:
+		return fmt.Sprintf("<%T>", typed)
 	}
-	return "(received: " + string(encoded) + ")"
 }
 
 // validateRadarIndicators errors when a scope renders radar without the
@@ -718,8 +742,8 @@ func lookupColumn(table *source.Table, name string) ([]any, error) {
 	}
 	index, ok := table.ColumnIndex(name)
 	if !ok {
-		return nil, fmt.Errorf("column %q not found; available columns: %s",
-			name, strings.Join(table.Columns, ", "))
+		return nil, fmt.Errorf("column %q not found%s; available columns: %s",
+			name, caseHint(name, table.Columns), strings.Join(table.Columns, ", "))
 	}
 	return table.ColumnValues(index), nil
 }
@@ -734,10 +758,20 @@ func lookupAxisColumn(table *source.Table, name string) ([]any, error) {
 	}
 	index, ok := table.ColumnIndex(name)
 	if !ok {
-		return nil, fmt.Errorf("column %q not found in the top-level source; available columns: %s",
-			name, strings.Join(table.Columns, ", "))
+		return nil, fmt.Errorf("column %q not found in the top-level source%s; available columns: %s",
+			name, caseHint(name, table.Columns), strings.Join(table.Columns, ", "))
 	}
 	return table.ColumnValues(index), nil
+}
+
+// caseHint names a differing-case column match, the most common near miss.
+func caseHint(name string, columns []string) string {
+	for _, column := range columns {
+		if strings.EqualFold(column, name) {
+			return fmt.Sprintf(" (a %q column exists; column names are case-sensitive)", column)
+		}
+	}
+	return ""
 }
 
 // objectList decodes a value that may be one object, an array of objects, or

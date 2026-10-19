@@ -71,7 +71,7 @@ Series data arrives inline (`series[].data`, native ECharts shapes) or bound to 
 | `series[].field` | Numeric source column; missing cells render as gaps |
 | `series[].columns` | Candlestick OHLC role-to-column map, assembled into `[open, close, lowest, highest]` tuples |
 | `series[].source` | Per-series table overriding the shared source (multi-file charts) |
-| implicit | A series with no data origin binds its table's sole numeric column (warned) |
+| implicit | A series with no data origin binds its table's sole numeric column silently (candlestick/violin excluded) |
 | `xAxis.column` / `yAxis[].column` | Category label columns |
 
 ### Data Sources

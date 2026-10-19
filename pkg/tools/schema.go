@@ -8,7 +8,8 @@ import (
 	"github.com/go-analyze/charts-mcp/pkg/chart"
 )
 
-// schema helpers keep the JSON schema maps terse.
+// schema helpers keep the JSON schema maps terse and avoid repeating literals.
+
 // mustJSON marshals v to a RawMessage, panicking on error since schemas are static.
 func mustJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)
@@ -17,8 +18,6 @@ func mustJSON(v any) json.RawMessage {
 	}
 	return b
 }
-
-// schema helpers keep the JSON schema maps terse and avoid repeating literals.
 
 // arrayProp builds an array schema entry; empty itemsType leaves items unconstrained.
 func arrayProp(itemsType string) map[string]any {
@@ -310,13 +309,13 @@ func seriesProp() map[string]any {
 	return map[string]any{"type": "array", "minItems": 1, "items": seriesItemSchema(),
 		"description": "Chart series; every entry needs a type and exactly one data origin: inline data, " +
 			"a bound field, or bound candlestick columns. A series with none binds its table's sole " +
-			"numeric column implicitly (warned)."}
+			"numeric column implicitly, except candlestick and violin which need structured tuples."}
 }
 
 func seriesItemSchema() map[string]any {
 	return objectSchema("One series. Exactly one data origin is required: data (inline ECharts shapes), field "+
 		"(a numeric source column), or columns (candlestick OHLC roles); a series carrying only name, type, "+
-		"or styling keys binds its table's sole numeric column implicitly (warned), erroring only when zero "+
+		"or styling keys binds its table's sole numeric column implicitly without a warning, erroring only when zero "+
 		"or several numeric columns leave the choice ambiguous. Bindings read the top-level source, or this "+
 		"series' own source when set.",
 		map[string]any{
@@ -378,7 +377,8 @@ func seriesTypeProp() map[string]any {
 		"description": "Chart type. For a horizontal bar or violin chart keep type bar or violin " +
 			"and move the category axis to y: set the first xAxis type to \"value\" or the first " +
 			"yAxis type to \"category\". horizontalBar and horizontalViolin are always-horizontal " +
-			"alternatives that ignore axis types."}
+			"alternatives that ignore axis types. candlestick and violin never bind a source column " +
+			"implicitly: they need inline OHLC or extent tuples, or candlestick columns."}
 }
 
 // radiusProp accepts a pixel number, percent string, or [inner, outer] pair.

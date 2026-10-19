@@ -1,5 +1,3 @@
-// Package source loads tabular data for the tools and resolves file paths
-// against a configurable base directory.
 package source
 
 import (
@@ -16,7 +14,7 @@ const (
 	TypeString = "string"
 )
 
-// Table is an in-memory tabular dataset shared by both tools.
+// Table is an in-memory tabular dataset.
 type Table struct {
 	// Columns are the column names in order.
 	Columns []string
@@ -34,7 +32,8 @@ func (t *Table) ColumnIndex(name string) (int, bool) {
 	return 0, false
 }
 
-// ColumnValues returns the cells of column index, padding short rows with nil.
+// ColumnValues returns the cells of column index, padding short rows with nil;
+// out-of-range indexes return nil.
 func (t *Table) ColumnValues(index int) []any {
 	if index < 0 || index >= len(t.Columns) {
 		return nil

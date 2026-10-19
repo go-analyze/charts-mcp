@@ -147,7 +147,7 @@ func ParseCSV(text string) (*Table, error) {
 	return parseDelimited(text, ',')
 }
 
-// ParseTSV loads a table from TSV text with a header row.
+// ParseTSV loads a table from TSV text with a header row, like ParseCSV.
 func ParseTSV(text string) (*Table, error) {
 	return parseDelimited(text, '\t')
 }

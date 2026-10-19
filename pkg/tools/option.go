@@ -21,14 +21,22 @@ func sanitizeOption(optionJSON []byte) ([]byte, []string, error) {
 		return nil, nil, fmt.Errorf("parse chart option: %w", err)
 	}
 	var warnings []string
+	axisCount := len(objectList(object["yAxis"]))
 	lintIgnoredTopLevel(object, &warnings)
 	stripColor("backgroundColor", object, "backgroundColor", &warnings)
 	for i, series := range objectList(object["series"]) {
 		prefix := fmt.Sprintf("series[%d]", i)
+		// a missing axis target silently draws every series on one scale,
+		// corrupting dual-axis charts, so it fails instead of warning
+		if idx, ok := series["yAxisIndex"].(float64); ok && (idx < 0 || idx >= float64(max(axisCount, 1))) {
+			return nil, nil, fmt.Errorf(
+				"%s.yAxisIndex %d references a missing yAxis entry (%d declared); add the axis entry or drop the index",
+				prefix, int(idx), axisCount)
+		}
 		if i > 0 {
 			lintChartWideSeries(prefix, series, &warnings)
 		}
-		lintFunnelPercentToken(prefix, series, &warnings)
+		stripFunnelPercentToken(prefix, series, &warnings)
 		if style := stringMap(series["itemStyle"]); style != nil {
 			stripColor(prefix+".itemStyle.color", style, "color", &warnings)
 		}
@@ -91,7 +99,6 @@ func lintIgnoredTopLevel(object map[string]any, warnings *[]string) {
 // renderer's ECharts adapter; extend both together.
 func lintIgnoredFields(object map[string]any, warnings *[]string) {
 	const advice = "is accepted but not rendered"
-	axisCount := len(objectList(object["yAxis"]))
 	for _, top := range []struct{ key, label string }{{"title", "title"}, {"legend", "legend"}} {
 		if component := stringMap(object[top.key]); component != nil {
 			if _, ok := component["backgroundColor"]; ok {
@@ -101,11 +108,6 @@ func lintIgnoredFields(object map[string]any, warnings *[]string) {
 	}
 	for i, series := range objectList(object["series"]) {
 		prefix := fmt.Sprintf("series[%d]", i)
-		if idx, ok := series["yAxisIndex"].(float64); ok && (idx < 0 || idx >= float64(max(axisCount, 1))) {
-			*warnings = append(*warnings, fmt.Sprintf(
-				"%s.yAxisIndex %d references a missing yAxis entry (%d declared)",
-				prefix, int(idx), axisCount))
-		}
 		for _, key := range []string{"max", "min", "barCategoryGap"} {
 			if _, ok := series[key]; ok {
 				*warnings = append(*warnings, prefix+"."+key+" "+advice)
@@ -236,18 +238,27 @@ func lintContinuousAxisType(path string, entry map[string]any, warnings *[]strin
 	}
 }
 
-// lintFunnelPercentToken warns when a funnel label formatter uses the {d}
-// percent token; the renderer never computes percentages for funnel bands,
-// so every token renders as 0.
-func lintFunnelPercentToken(path string, series map[string]any, warnings *[]string) {
+// stripFunnelPercentToken removes the {d} percent token from funnel label
+// formatters; the renderer never computes funnel percentages and the raw token
+// renders as 0, so dropping it keeps labels honest.
+func stripFunnelPercentToken(path string, series map[string]any, warnings *[]string) {
 	if seriesType, _ := series["type"].(string); seriesType != "funnel" {
 		return
 	}
-	template, _ := stringMap(series["label"])["formatter"].(string)
-	if strings.Contains(template, "{d}") {
-		*warnings = append(*warnings,
-			path+".label.formatter {d} is not computed on funnel; percent tokens render as 0")
+	label := stringMap(series["label"])
+	template, ok := label["formatter"].(string)
+	if !ok || !strings.Contains(template, "{d}") {
+		return
 	}
+	trimmed := strings.ReplaceAll(template, "{d}%", "")
+	trimmed = strings.TrimSpace(strings.ReplaceAll(trimmed, "{d}", ""))
+	if trimmed == "" {
+		delete(label, "formatter")
+	} else {
+		label["formatter"] = trimmed
+	}
+	*warnings = append(*warnings, path+
+		".label.formatter {d} is not computed on funnel, removed; {a}, {b}, and {c} still render")
 }
 
 // objectList decodes a value that may be one object, an array of objects, or
