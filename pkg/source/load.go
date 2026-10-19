@@ -23,10 +23,10 @@ const DefaultMaxRows = 100_000
 // grows its buffer lazily up to this cap.
 const maxJSONLLineBytes = 64 << 20
 
-// Load builds a Table from one of the four shared tool source forms: a scoped
-// file path, inline CSV text, columns plus array rows, or an array of object
-// rows. File paths resolve under root unless allowAbs permits absolute paths.
-func Load(root string, allowAbs bool, value any) (*Table, error) {
+// Load builds a Table from one of the four shared tool source forms: a file
+// path, inline CSV text, columns plus array rows, or an array of object rows.
+// Relative file paths resolve against the working directory.
+func Load(value any) (*Table, error) {
 	object, ok := value.(map[string]any)
 	if !ok {
 		return nil, errors.New("source must be an object with one of: file, csv, columns+rows, rows")
@@ -44,7 +44,7 @@ func Load(root string, allowAbs bool, value any) (*Table, error) {
 		if !ok {
 			return nil, errors.New("source file must be a string path")
 		}
-		return LoadScopedFile(root, allowAbs, path)
+		return LoadFile(path)
 	case hasCSV:
 		text, ok := object["csv"].(string)
 		if !ok {
@@ -119,7 +119,11 @@ func sourceObjectRows(value any) ([]map[string]any, error) {
 	for i, item := range items {
 		row, ok := item.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("source row %d must be an object", i)
+			if _, isArray := item.([]any); isArray {
+				return nil, fmt.Errorf(
+					"source row %d is an array; supply columns to plot array rows", i)
+			}
+			return nil, fmt.Errorf("source row %d must be an object; key rows by column name", i)
 		}
 		rows[i] = row
 	}
@@ -168,24 +172,24 @@ func parseDelimited(text string, comma rune) (*Table, error) {
 	return newTable(records[0], rows)
 }
 
-// ReadScopedFile returns the contents and resolved path of a scoped file. Used
-// for option files and other raw-content reads.
-func ReadScopedFile(root string, allowAbs bool, path string) ([]byte, string, error) {
-	resolved, err := ScopedPath(root, allowAbs, path)
+// ReadFile returns the contents and resolved path of a file. Used for option
+// files and other raw-content reads.
+func ReadFile(path string) ([]byte, string, error) {
+	resolved, err := filepath.Abs(path)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("resolve path: %w", err)
 	}
-	data, err := os.ReadFile(resolved) //nolint:gosec // path is validated by ScopedPath
+	data, err := os.ReadFile(resolved) //nolint:gosec // unrestricted read paths are intended
 	if err != nil {
 		return nil, "", fmt.Errorf("read file: %w", err)
 	}
 	return data, resolved, nil
 }
 
-// LoadScopedFile reads a scoped file, inferring the format from its extension:
-// csv, tsv, json, or jsonl.
-func LoadScopedFile(root string, allowAbs bool, path string) (*Table, error) {
-	data, resolved, err := ReadScopedFile(root, allowAbs, path)
+// LoadFile reads a data file, inferring the format from its extension: csv,
+// tsv, json, or jsonl.
+func LoadFile(path string) (*Table, error) {
+	data, resolved, err := ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +219,8 @@ func ParseJSON(data []byte) (*Table, error) {
 		for i, item := range value {
 			object, ok := item.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("json row %d must be an object", i)
+				return nil, fmt.Errorf(
+					"json row %d must be an object; key rows by column name, or use the csv/columns+rows source forms", i)
 			}
 			rows = append(rows, object)
 		}

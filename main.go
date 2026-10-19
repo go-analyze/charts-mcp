@@ -14,7 +14,6 @@ func main() {
 		return
 	}
 
-	config.LoadEnv()
 	srv := mcpserver.NewMCPServer("charts", config.Version)
 
 	if err := tools.Register(srv); err != nil {

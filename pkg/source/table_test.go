@@ -8,6 +8,7 @@ import (
 
 func TestTableColumnIndex(t *testing.T) {
 	t.Parallel()
+
 	table := &Table{Columns: []string{"month", "revenue"}}
 
 	index, ok := table.ColumnIndex("revenue")
@@ -20,6 +21,7 @@ func TestTableColumnIndex(t *testing.T) {
 
 func TestTableColumnValues(t *testing.T) {
 	t.Parallel()
+
 	table := &Table{
 		Columns: []string{"a", "b"},
 		Rows:    [][]any{{1, "x"}, {2}, {3, "y"}},
@@ -33,6 +35,7 @@ func TestTableColumnValues(t *testing.T) {
 
 func TestTableNullCount(t *testing.T) {
 	t.Parallel()
+
 	table := &Table{
 		Columns: []string{"a"},
 		Rows:    [][]any{{nil}, {""}, {"x"}, {}},
@@ -43,6 +46,7 @@ func TestTableNullCount(t *testing.T) {
 
 func TestTableColumnTypes(t *testing.T) {
 	t.Parallel()
+
 	table := &Table{
 		Columns: []string{"month", "revenue", "active", "blank"},
 		Rows: [][]any{
@@ -56,6 +60,7 @@ func TestTableColumnTypes(t *testing.T) {
 
 func TestInferColumnType(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name   string
 		values []any
@@ -76,6 +81,7 @@ func TestInferColumnType(t *testing.T) {
 
 func TestAsFloat64(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name  string
 		value any
@@ -102,6 +108,7 @@ func TestAsFloat64(t *testing.T) {
 
 func TestAsBool(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name  string
 		value any
@@ -125,6 +132,7 @@ func TestAsBool(t *testing.T) {
 
 func TestAsString(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name  string
 		value any

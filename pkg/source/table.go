@@ -1,5 +1,5 @@
-// Package source loads tabular data for both tools and scopes file access
-// against a configurable root directory.
+// Package source loads tabular data for the tools and resolves file paths
+// against a configurable base directory.
 package source
 
 import (
@@ -15,10 +15,6 @@ const (
 	TypeBool   = "bool"
 	TypeString = "string"
 )
-
-// DefaultMaxInferRows bounds type inference; beyond it, callers report only
-// schema and row count to protect the context window.
-const DefaultMaxInferRows = 100_000
 
 // Table is an in-memory tabular dataset shared by both tools.
 type Table struct {
@@ -72,13 +68,14 @@ func (t *Table) ColumnTypes() []string {
 	return types
 }
 
-// IsNull reports whether a cell holds no value: JSON null or an empty string.
+// IsNull reports whether a cell holds no value: JSON null, an empty string, or
+// the ECharts '-' missing-value placeholder.
 func IsNull(value any) bool {
 	switch v := value.(type) {
 	case nil:
 		return true
 	case string:
-		return v == ""
+		return v == "" || v == "-"
 	default:
 		return false
 	}

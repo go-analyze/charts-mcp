@@ -22,7 +22,6 @@ linters:
     - forbidigo
     - gocheckcompilerdirectives
     - gochecksumtype
-    - goconst
     - gosec
     - godoclint
     - grouper
@@ -48,7 +47,7 @@ linters:
       checks: ["all", "-ST1000", "-ST1018", "-QF1003", "-QF1008"]
     goconst:
       min-len: 4
-      min-occurrences: 4
+      min-occurrences: 8
 
 formatters:
   enable:

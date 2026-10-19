@@ -11,6 +11,7 @@ import (
 
 func TestLoadInlineForms(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name   string
 		source map[string]any
@@ -35,7 +36,7 @@ func TestLoadInlineForms(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			table, err := Load("", false, tc.source)
+			table, err := Load(tc.source)
 			require.NoError(t, err)
 			assert.Equal(t, []string{"month", "revenue"}, table.Columns)
 			// CSV cells stay strings; typed access goes through the As* helpers.
@@ -52,25 +53,39 @@ func TestLoadInlineForms(t *testing.T) {
 
 func TestLoadFileForm(t *testing.T) {
 	t.Parallel()
+
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "data.csv"), []byte("a,b\n1,x\n"), 0o600))
 
-	table, err := Load(root, false, map[string]any{"file": "data.csv"})
+	table, err := Load(map[string]any{"file": filepath.Join(root, "data.csv")})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a", "b"}, table.Columns)
 
-	_, err = Load("", true, map[string]any{"file": filepath.Join(root, "data.csv")})
+	_, err = Load(map[string]any{"file": filepath.Join(root, "data.csv")})
 	require.NoError(t, err)
 }
 
 func TestLoadErrors(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name   string
 		source any
 		want   string
 	}{
-		{"non object", "csv text", "source must be an object"},
+		{
+			"non object", "csv text", "source must be an object",
+		},
+		{
+			"rows of arrays without columns",
+			map[string]any{"rows": []any{[]any{"Jan", 120}}},
+			"supply columns to plot array rows",
+		},
+		{
+			"rows of scalars",
+			map[string]any{"rows": []any{1}},
+			"key rows by column name",
+		},
 		{"empty source", map[string]any{}, "source is empty"},
 		{
 			"multiple forms",
@@ -90,7 +105,7 @@ func TestLoadErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Load("", false, tc.source)
+			_, err := Load(tc.source)
 			assert.ErrorContains(t, err, tc.want)
 		})
 	}
@@ -98,6 +113,7 @@ func TestLoadErrors(t *testing.T) {
 
 func TestLoadRowCap(t *testing.T) {
 	t.Parallel()
+
 	rows := make([][]any, DefaultMaxRows+1)
 	for i := range rows {
 		rows[i] = []any{i}
@@ -109,6 +125,7 @@ func TestLoadRowCap(t *testing.T) {
 
 func TestParseJSONForms(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name     string
 		data     string
@@ -133,7 +150,7 @@ func TestParseJSONForms(t *testing.T) {
 		{
 			"scalar rejected",
 			`[1, 2]`,
-			nil, nil, "json row 0 must be an object",
+			nil, nil, "json row 0 must be an object; key rows by column name",
 		},
 		{
 			"array length mismatch",
@@ -155,8 +172,9 @@ func TestParseJSONForms(t *testing.T) {
 	}
 }
 
-func TestLoadScopedFileFormats(t *testing.T) {
+func TestLoadFileFormats(t *testing.T) {
 	t.Parallel()
+
 	files := map[string]string{
 		"data.csv":   "a,b\n1,x\n",
 		"data.tsv":   "a\tb\n1\tx\n",
@@ -168,25 +186,26 @@ func TestLoadScopedFileFormats(t *testing.T) {
 			root := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(content), 0o600))
 
-			table, err := Load(root, false, map[string]any{"file": name})
+			table, err := Load(map[string]any{"file": filepath.Join(root, name)})
 			require.NoError(t, err)
 			assert.Equal(t, []string{"a", "b"}, table.Columns)
 		})
 	}
 }
 
-func TestLoadScopedFileUnsupported(t *testing.T) {
+func TestLoadFileUnsupported(t *testing.T) {
 	t.Parallel()
+
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "data.txt"), []byte("x"), 0o600))
 
-	_, err := Load(root, false, map[string]any{"file": "data.txt"})
+	_, err := Load(map[string]any{"file": filepath.Join(root, "data.txt")})
 	assert.ErrorContains(t, err, "unsupported source format")
 }
 
-func TestLoadScopedFileMissing(t *testing.T) {
+func TestLoadFileMissing(t *testing.T) {
 	t.Parallel()
 
-	_, err := Load(t.TempDir(), false, map[string]any{"file": "missing.csv"})
+	_, err := Load(map[string]any{"file": "missing.csv"})
 	assert.ErrorContains(t, err, "read file")
 }
