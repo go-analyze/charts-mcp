@@ -5,7 +5,7 @@ go 1.26.7
 require (
 	github.com/go-analyze/bulk v0.1.6
 	github.com/go-analyze/charts v0.6.4
-	github.com/mark3labs/mcp-go v1.3.0
+	github.com/mark3labs/mcp-go v1.4.0
 	github.com/stretchr/testify v1.12.1
 )
 
